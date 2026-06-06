@@ -1,0 +1,6 @@
+#!/bin/sh
+# Local verification gate: refuse to push a red tree.
+# Runs the same `mvn verify` that CI runs, on the mise-pinned toolchain.
+set -e
+echo "pre-push: running mvn verify..."
+exec mise exec -- mvn -B -ntp verify

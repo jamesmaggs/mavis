@@ -26,8 +26,8 @@ This repository is also a proving ground for a **model-agnostic harness for spec
 The toolchain is pinned via [mise](https://mise.jdx.dev) ([ADR 0005](./docs/adrs/0005-mise-reproducible-toolchain.md)): Java 25 LTS + Maven.
 
 ```sh
-mise install                                   # provision the pinned toolchain (first run: mise trust)
-mise exec -- mvn verify                        # build + test (the local gate)
+./scripts/setup.sh                             # one-time: enable git hooks + install the pinned toolchain
+mise exec -- mvn verify                        # build + test (the local gate; also runs on pre-push)
 mise exec -- mvn -DskipTests package \
   && java -jar target/mavis.jar                # run locally (listens on $PORT, else 7070)
 ```
