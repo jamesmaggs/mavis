@@ -1,0 +1,12 @@
+# Railway build/deploy config-as-code. Service provisioning (project,
+# service, env vars) is documented separately under docs/ — see the
+# Railway provisioning runbook.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
