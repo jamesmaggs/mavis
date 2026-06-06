@@ -1,0 +1,526 @@
+-- allium: 3
+-- mavis.allium
+
+-- Scope: MAVIS conversational chatterbot — core behaviour.
+--
+-- Spirit: a whimsical homage to 1980s/90s chatterbots. Replies are deliberately
+-- nonsensical and driven entirely by what the user has typed. "Affable" is a
+-- presentation concern (tone of UI text, evocation of the era) and has no
+-- behavioural meaning — no content filtering, no curated personality, no
+-- attempt to make replies make sense.
+--
+-- Includes:
+--   - User identity (anonymous via browser, optionally authenticated via account).
+--   - Per-user Brain: Mavis's memory of what this user has said.
+--   - One continuous dialogue per user, with a user-initiated reset.
+--   - Turn-taking: user input is recorded, the Brain takes it in, Mavis replies.
+--   - Sign-in flow with merge-vs-fresh choice for the anonymous Brain/history.
+--   - Email-coded sign-in: request a code, receive it, submit it to bind an Account.
+-- Excludes:
+--   - Tokenisation grain, smoothing, sampling tactics — implementation choices.
+--   - Hosting, transport, persistence, UI presentation.
+--   - Email transport (SMTP, provider, templating) — modelled as a contract.
+-- Dependencies: none.
+
+contract LoginCodeMailer {
+    deliver: (recipient: String, code: String) -> Boolean
+
+    @guidance
+        -- The obligation the mail courier honours: given a recipient address
+        -- and a code, hand the message off for delivery and report whether
+        -- the handoff succeeded. Retries, bounces, templating and provider
+        -- choice are implementation, not domain.
+}
+
+entity Account {
+    email: String
+}
+
+entity User {
+    browser_id: String?                                  -- set once the user has been seen in a browser
+    account: Account?                                    -- set once the user has signed in
+    dialogue: Dialogue with user = this
+    brain: Brain with user = this
+    is_anonymous: account = null
+}
+
+entity Dialogue {
+    user: User
+    messages: Message with dialogue = this
+    inputs: messages where author = user_input           -- everything the user has said; feeds the Brain
+}
+
+entity Message {
+    dialogue: Dialogue
+    author: user_input | mavis_reply
+    text: String
+    at: Timestamp
+}
+
+entity Brain {
+    user: User
+    -- Mavis's memory of this user. Each word the user has said is remembered
+    -- alongside which words tended to follow it, with weights reflecting how
+    -- often each succession was observed. To speak, Mavis takes a random walk
+    -- through these weighted next-word transitions.
+    --
+    -- Words are compared case- and punctuation-sensitively: "Hello", "hello",
+    -- "hello," and "hello!" are four distinct words. The Brain preserves
+    -- exactly what the user typed; no normalisation, no case-folding. This
+    -- means a "terminator" is just a word whose form ends with a sentence
+    -- terminator (full stop, question mark or exclamation mark).
+    is_empty: user.dialogue.inputs.count = 0
+    @guidance
+        -- The Brain is fed only by the user's own inputs; Mavis's replies do
+        -- not feed back into it. This keeps Mavis's voice anchored in the
+        -- user's vocabulary. The internal representation (n-gram order,
+        -- smoothing, sampling tactics) is implementation; the domain
+        -- commitments are: (a) memory is per-user, (b) replies are generated
+        -- by weighted next-word transitions over remembered words, (c) words
+        -- are distinguished case- and punctuation-sensitively, (d) without
+        -- input there is nothing to walk.
+}
+
+entity LoginCode {
+    account: Account
+    code: String
+    requested_at: Timestamp
+    expires_at: Timestamp
+    used_at: Timestamp?
+    attempts: Integer
+    is_active: used_at = null and expires_at > now and attempts < config.max_login_attempts
+}
+
+entity Session {
+    user: User
+    started_at: Timestamp
+    expires_at: Timestamp
+    ended_at: Timestamp?
+    is_active: ended_at = null and expires_at > now
+}
+
+config {
+    response_target_length: Integer = 40
+    -- Soft cap. Mavis stops at any naturally-emitted terminator. Once she has
+    -- said this many words, she switches: at each step she takes a terminator
+    -- if one is reachable from the current word (ignoring its weight),
+    -- otherwise she continues by weight. The sentence always ends naturally —
+    -- this value is the point at which Mavis starts looking for the exit.
+
+    code_ttl: Duration = 10.minutes
+    -- How long a freshly-issued login code remains valid. After this window
+    -- elapses the code is no longer is_active, even if it has not been used.
+
+    max_login_attempts: Integer = 5
+    -- Cap on submissions per code. Once exceeded the code is no longer
+    -- is_active; the visitor must request a new one.
+
+    resend_cooldown: Duration = 30.seconds
+    -- Minimum interval between RequestsLoginCode firings for the same email.
+    -- Protects the mail courier and the email recipient from rapid duplicates.
+
+    session_ttl: Duration = 7.days
+    -- How long a Session remains is_active from started_at, absent an
+    -- explicit sign-out.
+}
+
+invariant UserHasIdentity {
+    -- Every user is reachable by at least one identifier; an unreachable user is
+    -- a leak.
+    for user in Users:
+        user.browser_id != null or user.account != null
+}
+
+invariant OneBrainPerUser {
+    for user in Users:
+        Brains.count(b => b.user = user) = 1
+}
+
+invariant OneDialoguePerUser {
+    for user in Users:
+        Dialogues.count(d => d.user = user) = 1
+}
+
+invariant InputReplyPairing {
+    -- Every Mavis reply is paired with a user input from the same dialogue at
+    -- the same instant. Currently a structural consequence of UserSendsInput
+    -- creating both messages in one firing with the same `at: now`; promoted
+    -- to an invariant so any future rule that produces a mavis_reply must
+    -- preserve the pairing.
+    for reply in Messages where author = mavis_reply:
+        Messages.any(input =>
+            input.author = user_input
+            and input.dialogue = reply.dialogue
+            and input.at = reply.at
+        )
+}
+
+invariant AccountUniquePerUser {
+    -- An Account binds to at most one User. Anonymous Users (account = null) are
+    -- not constrained.
+    --
+    -- This is also what protects against concurrent sign-in: if two browsers
+    -- fire SignsInKeepingHistory (or SignsInWithFreshStart) with the same
+    -- account near-simultaneously, Allium's serial rule firings ensure the
+    -- first commits and the second's `requires: not Users.any(u => u.account
+    -- = with_account)` fails. Only one binding ever happens; the loser's
+    -- session stays anonymous and the user retries (likely now into the
+    -- "returning account" rules).
+    for user in Users where account != null:
+        Users.count(u => u.account = user.account) = 1
+}
+
+invariant AccountEmailUnique {
+    -- An email address identifies at most one Account. RequestsLoginCode
+    -- relies on this when it upserts: a missing Account{email} is a true
+    -- absence, not a possibly-shadowed duplicate.
+    for account in Accounts:
+        Accounts.count(a => a.email = account.email) = 1
+}
+
+rule UserCreated {
+    when: user: User.created
+    ensures:
+        Dialogue.created(user: user)
+        Brain.created(user: user)
+    @guidance
+        -- Every User has exactly one Dialogue and one Brain, created with them.
+}
+
+rule AnonymousArrival {
+    when: BrowserArrives(browser_id)
+    requires: not Users.any(u => u.browser_id = browser_id)
+    ensures:
+        User.created(browser_id: browser_id, account: null)
+    @guidance
+        -- Browser identity is an opaque cookie/UUID minted on first arrival and
+        -- stable across visits from the same browser. Returning anonymous
+        -- visits don't fire this rule; they resume the existing User.
+        --
+        -- An anonymous User persists indefinitely alongside its cookie. There
+        -- is no idle expiry, no age cap and no MAVIS-level "forget me" — Reset
+        -- covers everything a user needs at the dialogue/Brain level. If the
+        -- cookie is cleared, the anonymous User is orphaned (unreachable) and
+        -- a new one is minted on the next anonymous visit; reaping orphans is
+        -- implementation hygiene, not specified behaviour.
+}
+
+rule UserSendsInput {
+    when: UserSends(user, text)
+    requires: length(trim(text)) > 0
+    let cold_start = user.brain.is_empty
+    ensures:
+        Message.created(
+            dialogue: user.dialogue,
+            author: user_input,
+            text: text,
+            at: now
+        )
+        if cold_start:
+            Message.created(
+                dialogue: user.dialogue,
+                author: mavis_reply,
+                text: EchoFromInput(text),
+                at: now
+            )
+        else:
+            Message.created(
+                dialogue: user.dialogue,
+                author: mavis_reply,
+                text: SpeakFrom(
+                    brain: user.brain,
+                    target_length: config.response_target_length
+                ),
+                at: now
+            )
+    @guidance
+        -- Two messages per turn: the user's input verbatim, then Mavis's reply.
+        -- The user's input message is recorded BEFORE the reply is generated,
+        -- so it counts toward the Brain. The first-ever reply (cold start) is
+        -- derived purely from the user's first input. EchoFromInput and
+        -- SpeakFrom are black-boxes: their inputs are fixed here, their
+        -- internal mechanics are implementation. See response_target_length
+        -- for the termination semantics of SpeakFrom.
+        --
+        -- Multiple inputs from the same user are processed strictly in arrival
+        -- order, one firing at a time: rapid back-to-back inputs A then B
+        -- produce messages A, ReplyA, B, ReplyB in the dialogue. The UI may
+        -- choose to display only the most recent reply, but every input gets
+        -- its own reply on the record.
+}
+
+rule UserResets {
+    when: UserRequestsReset(user)
+    ensures:
+        for message in user.dialogue.messages:
+            not exists message
+    @guidance
+        -- "Start afresh" button: removes every message in the dialogue. Because
+        -- Brain.is_empty is derived from inputs, the Brain becomes empty too.
+        -- The User, Dialogue and Brain entities themselves persist.
+}
+
+rule SignInWithMerge {
+    -- New account, bring history along.
+    when: SignsInKeepingHistory(browser_user, with_account)
+    requires: browser_user.is_anonymous
+    requires: not Users.any(u => u.account = with_account)
+    ensures:
+        browser_user.account = with_account
+    @guidance
+        -- Account is new (no User owns it yet). The anonymous Brain and
+        -- dialogue are kept verbatim — only the identity grows by gaining an
+        -- account binding.
+}
+
+rule SignInWithFreshStart {
+    -- New account, leave anonymous history behind.
+    when: SignsInWithFreshStart(browser_user, with_account)
+    requires: browser_user.is_anonymous
+    requires: not Users.any(u => u.account = with_account)
+    ensures:
+        User.created(browser_id: null, account: with_account)
+    @guidance
+        -- Account is new. A brand-new authenticated User is created (per rule
+        -- UserCreated they get their own empty Brain and Dialogue). The
+        -- anonymous User remains in place with its existing Brain, still
+        -- reachable from the same browser on subsequent anonymous visits.
+}
+
+rule ResumeAccountFoldingHistory {
+    -- Returning account, fold this browser's anonymous chatter into it.
+    when: SignsInKeepingHistory(browser_user, with_account)
+    requires: browser_user.is_anonymous
+    let existing = User{account: with_account}
+    requires: exists existing
+    ensures:
+        for message in browser_user.dialogue.messages:
+            message.dialogue = existing.dialogue
+    @guidance
+        -- Account already has a User (a previous sign-in elsewhere). The
+        -- authenticated User resumes, and the anonymous messages on this
+        -- browser are moved into the authenticated Dialogue. Because Brain
+        -- is derived from dialogue inputs, the authenticated Brain naturally
+        -- absorbs the new vocabulary. The anonymous User on this browser is
+        -- left in place, now empty and ready for the next anonymous visit
+        -- from this browser.
+}
+
+rule UserSignsOut {
+    -- Clean-break sign-out: a fresh anonymous identity replaces the
+    -- authenticated one on this browser.
+    when: UserSignsOut(visitor, new_browser_id)
+    requires: visitor.account != null
+    requires: not Users.any(u => u.browser_id = new_browser_id)
+    ensures:
+        if visitor.browser_id != null:
+            visitor.browser_id = null
+        User.created(browser_id: new_browser_id, account: null)
+        for session in Sessions where user = visitor and session.is_active:
+            session.ended_at = now
+    @guidance
+        -- The runtime rotates the cookie (passes the fresh value as
+        -- new_browser_id) and a brand-new anonymous User is minted. The
+        -- previously-authenticated User keeps its account and history so
+        -- signing back in later resumes it; in the merge case where it also
+        -- held a browser_id, that binding is released. Any dormant anonymous
+        -- User left over from a prior fresh-start sign-in still has its old
+        -- browser_id but is now orphaned (no live cookie matches it).
+        --
+        -- Any Sessions still is_active for this User are closed here, so
+        -- sign-out is the single point at which authenticated dialogue
+        -- access ends. Codes still in-flight at sign-out are left alone;
+        -- they will expire on their own and cannot be used to re-enter
+        -- without a fresh RequestsLoginCode.
+}
+
+rule ResumeAccount {
+    -- Returning account, leave the anonymous chatter where it is.
+    when: SignsInWithFreshStart(browser_user, with_account)
+    requires: browser_user.is_anonymous
+    let existing = User{account: with_account}
+    requires: exists existing
+    ensures: nothing
+    @guidance
+        -- Account already has a User; the user has chosen to leave this
+        -- browser's anonymous Brain and history alone. The session itself
+        -- is opened by SubmitsLoginCode, which fires this trigger.
+        -- The anonymous User on this browser is untouched; later anonymous
+        -- visits from this browser resume it.
+}
+
+rule RequestsLoginCode {
+    -- A visitor asks for a code to be sent to their email. If no Account
+    -- exists for that email yet we mint one; either way we issue a fresh
+    -- LoginCode, superseding any active predecessor for the same account.
+    when: RequestsLoginCode(email)
+    let existing_account = Account{email: email}
+    requires:
+        not LoginCodes.any(c =>
+            c.account.email = email
+            and c.requested_at + config.resend_cooldown > now
+        )
+    ensures:
+        let target_account =
+            if exists existing_account:
+                existing_account
+            else:
+                Account.created(email: email)
+        for prior in LoginCodes where account = target_account and prior.is_active:
+            prior.used_at = now
+        let code = MintLoginCode(email)
+        LoginCode.created(
+            account: target_account,
+            code: code,
+            requested_at: now,
+            expires_at: now + config.code_ttl,
+            used_at: null,
+            attempts: 0
+        )
+        LoginCodeIssued(account: target_account, code: code)
+    @guidance
+        -- The rate-limit guard works for both first-time and returning
+        -- emails because the inner predicate walks LoginCodes by email,
+        -- not by a not-yet-existent Account. MintLoginCode is a black box:
+        -- the spec doesn't care whether the code is six digits, eight
+        -- letters or a passphrase, only that it can be presented back
+        -- verbatim. Superseding the prior code (rather than rejecting the
+        -- new request) is deliberate: a user who didn't see the first
+        -- email should be able to ask again without admin help.
+}
+
+rule DeliversLoginCode {
+    -- The internal "we have a code to send" event becomes the outbound
+    -- hand-off to the mail courier. The courier's MailDelivery surface
+    -- demands LoginCodeMailer; what the courier does with the request
+    -- (provider choice, retries, bounce handling) is theirs to honour.
+    when: LoginCodeIssued(account, code)
+    ensures:
+        DeliverLoginCode(recipient: account.email, code: code)
+    @guidance
+        -- Delivery failure is out of scope here. If the courier reports
+        -- a failed handoff, the visitor's recourse is the same as for any
+        -- other undelivered mail: request another code. That's already
+        -- expressible via RequestsLoginCode, gated by resend_cooldown.
+}
+
+rule SubmitsLoginCode {
+    -- Visitor presents a code to bind an Account to their browser session.
+    -- The cases split on whether a matching, still-active code exists.
+    when: SubmitsLoginCode(browser_user, email, code, keep_history)
+    requires: browser_user.is_anonymous
+    let account = Account{email: email}
+    let candidate = LoginCode{account: account, code: code}
+    ensures:
+        if exists candidate and candidate.is_active:
+            candidate.used_at = now
+            Session.created(
+                user: browser_user,
+                started_at: now,
+                expires_at: now + config.session_ttl,
+                ended_at: null
+            )
+            if keep_history:
+                SignsInKeepingHistory(browser_user: browser_user, with_account: account)
+            else:
+                SignsInWithFreshStart(browser_user: browser_user, with_account: account)
+        else:
+            if exists candidate:
+                candidate.attempts = candidate.attempts + 1
+    @guidance
+        -- Three outcomes: (a) good code — open a Session and chain to the
+        -- existing sign-in triggers, which still do the actual identity
+        -- work (binding the account, folding history, or starting fresh);
+        -- (b) wrong-but-known code — increment attempts, which may push
+        -- it past max_login_attempts and so out of is_active; (c) nothing
+        -- to find — silent no-op, indistinguishable from (b) to the
+        -- visitor, so the surface can't be used to enumerate emails.
+        --
+        -- The Session is keyed on browser_user. In the
+        -- ResumeAccountFoldingHistory and SignInWithFreshStart paths the
+        -- "current" User may shift to the previously-authenticated one;
+        -- the Session created here stays attached to the browser_user
+        -- that submitted the code. That matches sign-out behaviour:
+        -- UserSignsOut closes Sessions belonging to the visitor that
+        -- holds the cookie at sign-out time.
+}
+
+actor MailCourier {
+    identified_by: User where account = null
+    -- Placeholder identity: the courier is an integration partner, not a
+    -- person. The condition is intentionally trivial; it exists to satisfy
+    -- the actor declaration shape. The courier never logs in.
+}
+
+surface MailDelivery {
+    facing courier: MailCourier
+
+    contracts:
+        demands LoginCodeMailer
+
+    @guidance
+        -- MAVIS hands the courier an email address and a code. The courier
+        -- returns whether handoff succeeded; retries, bounces and template
+        -- choices are implementation, not domain. The DeliverLoginCode
+        -- trigger emitted by DeliversLoginCode is the request the courier
+        -- services.
+}
+
+surface MavisConversation {
+    facing visitor: User
+
+    exposes:
+        visitor.is_anonymous
+        visitor.account
+        for message in visitor.dialogue.messages:
+            message.author
+            message.text
+            message.at
+
+    provides:
+        UserSends(visitor, text)
+        UserRequestsReset(visitor)
+        UserSignsOut(visitor, new_browser_id)
+            when not visitor.is_anonymous
+
+    @guarantee NonEmptyInput
+        -- The text passed to UserSends is non-empty after trimming whitespace.
+        -- The surface rejects empty or whitespace-only submissions; the
+        -- trigger does not fire for them. Mavis never sees a blank input.
+
+    @guidance
+        -- The conversation surface. Anonymous and authenticated visitors see
+        -- the same shape — a list of their messages and their identity state.
+        --
+        -- BrowserArrives is deliberately not surfaced here: it's a bootstrap
+        -- event fired by the runtime when an unknown cookie arrives, not a
+        -- visitor-initiated operation. The `unreachableTrigger` info that the
+        -- checker reports for it is honest documentation.
+        --
+        -- Sign-in is now driven by AccountSignIn; the
+        -- SignsInKeepingHistory / SignsInWithFreshStart triggers fire only
+        -- as chained ensures from SubmitsLoginCode and are not part of any
+        -- public surface.
+}
+
+surface AccountSignIn {
+    facing visitor: User
+
+    provides:
+        RequestsLoginCode(email)
+            when visitor.is_anonymous
+        SubmitsLoginCode(visitor, email, code, keep_history)
+            when visitor.is_anonymous
+
+    @guidance
+        -- The only public sign-in entry point. The visitor submits an email
+        -- to receive a code, then submits the code to be signed in. The
+        -- existing SignsInKeepingHistory / SignsInWithFreshStart triggers
+        -- are fired internally by SubmitsLoginCode and are no longer part
+        -- of any surface contract.
+        --
+        -- No exposes clause: "we've emailed you a code" is a UI state, not
+        -- a domain projection. The visitor knows what email they submitted
+        -- and the LoginCode itself isn't observable to them by design.
+}
+
