@@ -1,0 +1,13 @@
+# Keep the build context to just what the image needs (pom.xml + src).
+target/
+.git/
+.github/
+docs/
+*.md
+mise.toml
+railway.toml
+LICENSE
+.idea/
+*.iml
+.vscode/
+.DS_Store
