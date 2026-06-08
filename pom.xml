@@ -25,6 +25,7 @@
         <compiler.plugin.version>3.15.0</compiler.plugin.version>
         <surefire.plugin.version>3.5.6</surefire.plugin.version>
         <shade.plugin.version>3.6.2</shade.plugin.version>
+        <exec.plugin.version>3.5.0</exec.plugin.version>
     </properties>
 
     <dependencyManagement>
@@ -62,6 +63,42 @@
     <build>
         <finalName>mavis</finalName>
         <plugins>
+            <!-- Deterministic gates, run first (validate) so `mvn verify` is the
+                 single build command: toolchain lockstep + Allium spec check. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>${exec.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>toolchain-lockstep</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>bash</executable>
+                            <arguments>
+                                <argument>scripts/check-toolchain.sh</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>spec-check</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>bash</executable>
+                            <arguments>
+                                <argument>scripts/check-spec.sh</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

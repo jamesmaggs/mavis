@@ -1,0 +1,7 @@
+#!/bin/sh
+# Local build gate: run the full build before each commit. `mvn verify` is the
+# single build command — its validate phase runs the toolchain lockstep and
+# Allium spec checks, then it compiles, tests and packages. A red build blocks
+# the commit.
+set -e
+exec mise exec -- mvn -B -ntp verify
