@@ -1,6 +1,10 @@
 #!/bin/sh
 # Local verification gate: refuse to push a red tree.
-# Runs the same `mvn verify` that CI runs, on the mise-pinned toolchain.
+# Cheapest check first (toolchain lockstep), then the same `mvn verify` that CI
+# runs, on the mise-pinned toolchain.
 set -e
+root="$(git rev-parse --show-toplevel)"
+echo "pre-push: checking toolchain lockstep..."
+"$root/scripts/check-toolchain.sh"
 echo "pre-push: running mvn verify..."
 exec mise exec -- mvn -B -ntp verify

@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      # Cheapest gate first: the toolchain pinned in mise.toml must match the
+      # Dockerfile base images (ADR 0006). Pure text check, no toolchain needed.
+      - name: Toolchain lockstep (mise vs Dockerfile)
+        run: bash scripts/check-toolchain.sh
       # Installs Java + Maven from the committed mise.toml — same toolchain
       # as local dev, so CI is the authoritative backstop, not a divergence.
       - uses: jdx/mise-action@v4
