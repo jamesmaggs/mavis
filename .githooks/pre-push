@@ -6,5 +6,7 @@ set -e
 root="$(git rev-parse --show-toplevel)"
 echo "pre-push: checking toolchain lockstep..."
 "$root/scripts/check-toolchain.sh"
+echo "pre-push: checking specs (allium)..."
+"$root/scripts/check-spec.sh"
 echo "pre-push: running mvn verify..."
 exec mise exec -- mvn -B -ntp verify

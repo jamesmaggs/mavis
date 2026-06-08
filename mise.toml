@@ -3,3 +3,6 @@
 [tools]
 java = "temurin-25.0.3+9.0.LTS"
 maven = "3.9.16"
+# Allium spec checker (prebuilt binary). Used by the spec-check gate; not part
+# of the deploy image, so it is intentionally absent from the Dockerfile.
+"github:juxt/allium-tools" = "3.2.4"

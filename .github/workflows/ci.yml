@@ -15,9 +15,12 @@ jobs:
       # Dockerfile base images (ADR 0006). Pure text check, no toolchain needed.
       - name: Toolchain lockstep (mise vs Dockerfile)
         run: bash scripts/check-toolchain.sh
-      # Installs Java + Maven from the committed mise.toml — same toolchain
-      # as local dev, so CI is the authoritative backstop, not a divergence.
+      # Installs Java + Maven + allium from the committed mise.toml — same
+      # toolchain as local dev, so CI is the authoritative backstop.
       - uses: jdx/mise-action@v4
+      # The Allium spec is the source of truth; an invalid spec fails the build.
+      - name: Spec check (allium)
+        run: bash scripts/check-spec.sh
       - run: mvn -B -ntp verify
 
   deploy:
