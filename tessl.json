@@ -1,0 +1,12 @@
+{
+  "name": "engineering/mavis",
+  "mode": "managed",
+  "dependencies": {
+    "engineering/adr": {
+      "version": "0.1.0"
+    },
+    "engineering/commit": {
+      "version": "0.2.0"
+    }
+  }
+}

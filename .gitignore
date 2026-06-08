@@ -8,3 +8,9 @@ target/
 
 # OS noise
 .DS_Store
+
+# Tessl-managed skills.
+.tessl/
+.agents/
+.claude/skills/
+.github/skills/
