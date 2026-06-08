@@ -18,6 +18,24 @@ jobs:
       # packages — same as the local pre-commit hook.
       - run: mvn -B -ntp verify
 
+  commitlint:
+    name: Commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v4
+      # Backstop for the local commit-msg hook: lint the pushed commit range
+      # (fall back to the last commit when the base ref is absent, e.g. a new branch).
+      - name: Lint commit messages (Conventional Commits)
+        run: |
+          if git rev-parse --quiet --verify "${{ github.event.before }}^{commit}" >/dev/null 2>&1; then
+            mise exec -- commitlint --from "${{ github.event.before }}" --to "${{ github.sha }}"
+          else
+            mise exec -- commitlint --last
+          fi
+
   deploy:
     name: Deploy
     needs: verify

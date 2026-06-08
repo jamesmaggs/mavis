@@ -6,3 +6,7 @@ maven = "3.9.16"
 # Allium spec checker (prebuilt binary). Used by the spec-check gate; not part
 # of the deploy image, so it is intentionally absent from the Dockerfile.
 "github:juxt/allium-tools" = "3.2.4"
+# Commit-message linter (Conventional Commits). Dev/CI only; node + the
+# commitlint CLI are pinned here so the commit-msg hook and CI agree.
+node = "24.16.0"
+"npm:@commitlint/cli" = "21.0.2"

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Commit-message gate: enforce Conventional Commits via commitlint (pinned in
+# mise.toml). $1 is the path to the commit message file git passes in.
+exec mise exec -- commitlint --edit "$1"
