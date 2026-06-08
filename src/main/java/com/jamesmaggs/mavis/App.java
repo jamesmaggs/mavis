@@ -5,8 +5,9 @@ import io.javalin.Javalin;
 /**
  * Entry point for the Mavis web application.
  *
- * <p>This is the walking-skeleton seed: it serves a single greeting so the
- * full deploy pipeline can be proven before any real behaviour exists.
+ * <p>This is the walking-skeleton seed: it serves a single greeting and echoes
+ * posted input, so the full deploy pipeline can be proven before any real
+ * conversational behaviour exists.
  */
 public final class App {
 
@@ -39,6 +40,7 @@ public final class App {
     static Javalin start(int port) {
         return Javalin.create()
                 .get("/", ctx -> ctx.result("hello world"))
+                .post("/echo", ctx -> ctx.result(ctx.body()))
                 .start(port);
     }
 }

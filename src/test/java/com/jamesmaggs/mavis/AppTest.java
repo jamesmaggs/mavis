@@ -27,4 +27,21 @@ class AppTest {
             app.stop();
         }
     }
+
+    @Test
+    void echoesPostedBody() throws Exception {
+        Javalin app = App.start(0);
+        try {
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://localhost:" + app.port() + "/echo"))
+                            .POST(HttpRequest.BodyPublishers.ofString("marco polo"))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(200, response.statusCode());
+            assertEquals("marco polo", response.body());
+        } finally {
+            app.stop();
+        }
+    }
 }
